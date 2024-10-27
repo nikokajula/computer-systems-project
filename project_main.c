@@ -135,36 +135,34 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
 }
 
 Void sensorTaskFxn(UArg arg0, UArg arg1) {
+    I2C_Handle i2c;
+    I2C_Params i2cParams;
+
     switch (sensorState) {
         case READGYRO:
-            I2C_Handle i2cMPU;
-            I2C_Params i2cMPUParams;
 
-            I2C_Params_init(&i2cMPUParams);
-            i2cMPUParams.bitRate = I2C_400kHz;
-            i2cMPUParams.custom = (uintptr_t)&i2cMPUCfg;
+            I2C_Params_init(&i2cParams);
+            i2cParams.bitRate = I2C_400kHz;
+            i2cParams.custom = (uintptr_t)&i2cMPUCfg;
             // Power the MPU9250 sensor. Must do I2C_Close() before using another sensor, and using I2C_open() again.
             PIN_setOutputValue(hMpuPin,Board_MPU_POWER, Board_MPU_POWER_ON);
 
             System_printf("MPU9250: Power ON\n");
             System_flush();
 
-            i2cMPU = I2C_open(Board_I2C, &i2cMPUParams);
-            if (i2cMPU == NULL) {
+            i2c = I2C_open(Board_I2C, &i2cParams);
+            if (i2c == NULL) {
                 System_abort("Error Initializing I2CMPU\n");
             }
 
             System_printf("MPU9250: Setup and calibration...\n");
             System_flush();
             Task_sleep(100000 / Clock_tickPeriod);
-            mpu9250_setup(&i2cMPU);
+            mpu9250_setup(&i2c);
             System_printf("MPU9250: Setup and calibration OK\n");
             System_flush();
             break;
         case READLIGHT:
-            I2C_Handle i2c;
-            I2C_Params i2cParams;
-            I2C_Transaction i2cMessage;
 
             I2C_Params_init(&i2cParams);
             i2cParams.bitRate = I2C_400kHz;
@@ -188,17 +186,18 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
         default:
             break;
     }
-
+    char debug_msg[100];
     while (1) {
         switch (sensorState){
-            case READGYRO:
+            // Should programState be rad and if it is DATA_READY it wouldn't be read again
+            case READGYRO: {
                 float ax, ay, az, gx, gy, gz;
                 float rotation_x = 0.0;
                 bool rotated_90 = false;
 
-                mpu9250_get_data(&i2cMPU, &ax, &ay, &az, &gx, &gy, &gz);
+                mpu9250_get_data(&i2c, &ax, &ay, &az, &gx, &gy, &gz);
 
-                char debug_msg[100];
+
                 sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f\n",ax, ay, az, gx, gy, gz);
                 System_printf(debug_msg);
                 System_flush();
@@ -224,16 +223,14 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
 
                 programState = DATA_READY;
 
-                Task_sleep(10000 / Clock_tickPeriod);
-
                 //Change sensorState and close connection.
                 //I2C_close();
 
                 break;
-            case READLIGHT:
+            }
+            case READLIGHT: {
                 double data = opt3001_get_data(&i2c);
 
-                char debug_msg[100];
                 sprintf(debug_msg,"...%f",data);
                 System_printf(debug_msg);
                 System_flush();
@@ -241,17 +238,17 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                 ambientLight = data;
                 programState = DATA_READY;
 
-                Task_sleep(100000 / Clock_tickPeriod);
-
                 //Change sensorState and close connection.
                 //I2C_close();
                 break;
-            default:
+            }
+            default: {
                 System_printf("Running default case. Not reading any sensors.\n");
                 System_flush();
-                Task_sleep(10000 / Clock_tickPeriod);
                 break;
+            }
         }
+        Task_sleep(100000 / Clock_tickPeriod);
     }
 }
 

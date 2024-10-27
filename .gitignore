@@ -1,0 +1,9 @@
+Debug/
+src/
+.ccsproject
+.clangd
+.cproject
+.launches/
+.project
+.settings/
+.xdchelp
