@@ -62,6 +62,54 @@ static const I2CCC26XX_I2CPinCfg i2cMPUCfg = {
     .pinSDA = Board_I2C0_SDA1,
     .pinSCL = Board_I2C0_SCL1
 };
+const int max_morsecode_length = 5;
+char morsecode_to_letter[36];
+char codes[36][5] = {".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--..", "-----", ".----", "..---", "...--", "....-", ".....", "-....", "--...", "---..", "----."}; 
+const code_length = 16;
+
+static uint16_t code = 0;
+static uint16_t position = 0;
+
+void init_char_encoding() {
+    code = 0;
+    position = 14;
+}
+
+int encode_char_to_code(char* morse) {
+    if(morse == '\r')
+        return 0;
+    if(position > -1 || morse == '\n') 
+        return -1;
+    position -= 2;
+    return 0;
+}
+
+int get_code() {
+    return code;
+}
+
+void init_morsecode_converison() {
+    int i;
+    for (i = 0; i < 36; i++) {
+        init_char_encoding();
+        int j;
+        for(j = 0; !encode_char_to_code(codes[i][j]); j++);
+        morsecode_to_letter[i] = get_code();
+    } 
+}
+
+char decode_morse(uint16_t morse_code) {
+    int i;
+    for (i = 0; i < 36; i++) {
+        if (morsecode_to_letter[i] == morse_code) {
+            if(i < 26) {
+                return i + 'a';
+            } else {
+                return i + 22;
+            }
+        }
+    }
+}
 
 // Power Button
 PIN_Config powerButtonConfig[] = {
@@ -86,6 +134,14 @@ void buttonFxn(PIN_Handle handle, PIN_Id pinId) {
     PIN_setOutputValue(ledHandle, Board_LED0, pinValue);
 }
 
+char readUART(UART_Handle uart) {
+    char char_received;
+    do {
+        UART_read(uart, &char_received, 1);
+    } while(!encode_char_to_code(char_received));
+    return decode_morse(get_code());
+}
+
 /* Task Functions */
 Void uartTaskFxn(UArg arg0, UArg arg1) {
 
@@ -95,8 +151,8 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
     UART_Params_init(&uartParams);
     uartParams.writeDataMode = UART_DATA_TEXT;
     uartParams.readDataMode = UART_DATA_TEXT;
-    uartParams.readEcho = UART_ECHO_OFF;
-    uartParams.readMode=UART_MODE_BLOCKING;
+    uartParams.readEcho = UART_ECHO_ON;
+    uartParams.readMode = UART_MODE_BLOCKING;
     uartParams.baudRate = 9600;
     uartParams.dataLength = UART_LEN_8;
     uartParams.parityType = UART_PAR_NONE;
@@ -106,9 +162,8 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
     if (uart == NULL) {
        System_abort("Error opening the UART");
     }
-
+    init_morsecode_converison();
     while (1) {
-
         // if(programState == DATA_READY){
         //     char debug_msg[100];
         //     sprintf(debug_msg,"...%f",ambientLight);
@@ -118,15 +173,11 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
         //     UART_write(uart, debug_msg, strlen(debug_msg));
         //     programState = WAITING;
         // }
-
-        System_printf("taalla");
-        System_flush();
-        char char_received;
         char debug_msg[100];
-        UART_read(uart, &char_received, 1);     
-        sprintf(debug_msg, "Received: %c",char_received);
-        System_printf(debug_msg);
-        System_flush();
+        char char_received;
+        UART_read(uart, &char_received, 1);
+        sprintf(debug_msg, "Received: %i",char_received);
+        UART_write(uart, &debug_msg, 11);
 
         programState = WAITING;
         
@@ -140,7 +191,6 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
 
     switch (sensorState) {
         case READGYRO:
-
             I2C_Params_init(&i2cParams);
             i2cParams.bitRate = I2C_400kHz;
             i2cParams.custom = (uintptr_t)&i2cMPUCfg;
@@ -186,28 +236,29 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
         default:
             break;
     }
-    char debug_msg[100];
+    double previous_time =  (Clock_getTicks() * Clock_tickPeriod) / 1000000; // tick period is us 1000000 us in second
+    float rotation_x = 0.0;
+    bool rotated_90 = false;
     while (1) {
         switch (sensorState){
             // Should programState be rad and if it is DATA_READY it wouldn't be read again
             case READGYRO: {
                 float ax, ay, az, gx, gy, gz;
-                float rotation_x = 0.0;
-                bool rotated_90 = false;
-
+                rotated_90 = false;
                 mpu9250_get_data(&i2c, &ax, &ay, &az, &gx, &gy, &gz);
+                double time = (Clock_getTicks() * Clock_tickPeriod) / 1000000; // tick period is us 1000000 us in second
 
-
-                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f\n",ax, ay, az, gx, gy, gz);
+                char debug_msg[100];
+                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f\n, rotation_x %f",ax, ay, az, gx * time, gy, gz, rotation_x);
                 System_printf(debug_msg);
                 System_flush();
 
                 if (fabs(gx) > 20.0) {
-                    rotation_x += gx * (0.01);
+                    rotation_x += gx * (time - previous_time);
                 } else {
                     rotation_x *= 0.9;
                 }
-
+                previous_time = time;
                 //Detect 90 degrees rotation and 90 degrees rotation back for X-axis
                 if (!rotated_90 && fabs(rotation_x) >= 90.0) {
                     System_printf("90-degree rotation detected on X-axis!\n");
@@ -230,7 +281,7 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
             }
             case READLIGHT: {
                 double data = opt3001_get_data(&i2c);
-
+                char debug_msg[100];
                 sprintf(debug_msg,"...%f",data);
                 System_printf(debug_msg);
                 System_flush();

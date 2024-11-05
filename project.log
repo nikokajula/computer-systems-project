@@ -6,3 +6,51 @@
 
 		!NOTE: Deprecated build flag '--float_support=vfplib' was migrated to '--float_support=none'.
 
+
+
+!CONFIGURATION: 'Debug__TICLANG' (com.ti.ccstudio.buildDefinitions.TMS470.Debug.1725335456) [Sun Oct 27 20:46:31 EET 2024]
+
+	!TOOL: 'Arm Compiler' (com.ti.ccstudio.buildDefinitions.TMS470_TICLANG_4.0.exe.compilerDebug.725412484)
+
+		!NOTE: Source-tool default '--c89 --relaxed_ansi' has been migrated to target-tool setting '-std=gnu90'
+
+		!NOTE: Source-tool default '--c++14 --relaxed_ansi' has been migrated to target-tool setting '-std=gnu++14'
+
+		!NOTE: Source-tool setting '-mv7M3' has been migrated to target-tool setting '-march=thumbv7m -mcpu=cortex-m3'
+
+		!NOTE: Source-tool setting '--float_support=none' has been migrated to target-tool setting '-mfloat-abi=soft'
+
+		!NOTE: Source-tool default '--endian=little' has been migrated to target-tool setting '-mlittle-endian'
+
+		!NOTE: Source-tool setting '--code_state=16' has been migrated to target-tool setting '-mthumb'
+
+		!NOTE: Source-tool default '-Ooff' has been migrated to target-tool setting '-O0'
+			tiarmclang's -O0 option disables optimization
+
+		!NOTE: Source-tool setting: 
+				--include_path="${COM_TI_RTSC_TIRTOSCC13XX_CC26XX_INCLUDE_PATH}" --include_path="${PROJECT_ROOT}" --include_path="${workspace_loc:/${ProjName}}" --include_path="${COM_TI_RTSC_TIRTOSCC13XX_CC26XX_INSTALL_DIR}/products/cc26xxware_2_24_03_17272" --include_path="${CG_TOOL_ROOT}/include" 
+			has been migrated to target-tool setting: 
+				-I"${COM_TI_RTSC_TIRTOSCC13XX_CC26XX_INCLUDE_PATH}" -I"${PROJECT_ROOT}" -I"${workspace_loc:/${ProjName}}" -I"${COM_TI_RTSC_TIRTOSCC13XX_CC26XX_INSTALL_DIR}/products/cc26xxware_2_24_03_17272" -I"${CG_TOOL_ROOT}/include"
+
+		!NOTE: Source-tool setting: 
+				--define=${COM_TI_RTSC_TIRTOSCC13XX_CC26XX_SYMBOLS} --define=ccs 
+			has been migrated to target-tool setting: 
+				-D${COM_TI_RTSC_TIRTOSCC13XX_CC26XX_SYMBOLS} -Dccs
+
+		!NOTE: Source-tool setting '-g' has been migrated to target-tool setting '-gdwarf-3'
+
+		!NOTE: Source-tool default '--wchar_t=16' has been migrated to target-tool setting '-fno-short-wchar'
+			tiarmclang does not support 16-bit wchar_t in its runtime libraries; the --wchar_t=16 option will map to tiarmclang's -fno-short-wchar option (32-bit wchar_t type assumed)
+
+		!NOTE: Source-tool default '--common=on' has been migrated to target-tool setting '-fcommon'
+
+		!NOTE: Source-tool setting '--gen_func_subsections=on' has been migrated to target-tool setting '-ffunction-sections'
+
+		!NOTE: Source-tool default '' has been migrated to target-tool setting '-Werror=ti-pragmas -Werror=ti-macros -Werror=ti-intrinsics'
+			use of legacy TI pragmas will be flagged as errors
+			use of legacy TI pre-defined macro symbols will be flagged as errors
+			use of legacy TI intrinsics will be flagged as errors
+
+		!WARNING: The following source-tool settings were not migrated because no migration rules have been defined - please migrate these settings manually, if applicable: 
+				--diag_warning=225 --diag_warning=255 --diag_wrap=off --display_error_number
+
