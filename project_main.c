@@ -5,6 +5,7 @@
 #include <xdc/std.h>
 #include <xdc/runtime/System.h>
 
+#include <math.h>
 #include <string.h>
 
 /* BIOS Header files */
@@ -65,7 +66,9 @@ static const I2CCC26XX_I2CPinCfg i2cMPUCfg = {
 const int max_morsecode_length = 5;
 char morsecode_to_letter[36];
 char codes[36][5] = {".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--..", "-----", ".----", "..---", "...--", "....-", ".....", "-....", "--...", "---..", "----."}; 
-const code_length = 16;
+const int code_length = 16;
+
+static char char_to_send;
 
 static uint16_t code = 0;
 static uint16_t position = 0;
@@ -76,10 +79,11 @@ void init_char_encoding() {
 }
 
 int encode_char_to_code(char* morse) {
-    if(morse == '\r')
+    if(*morse == '\r')
         return 0;
-    if(position > -1 || morse == '\n') 
+    if(position > -1 || *morse == '\n') 
         return -1;
+    code += (*morse - 44) << position;
     position -= 2;
     return 0;
 }
@@ -93,7 +97,7 @@ void init_morsecode_converison() {
     for (i = 0; i < 36; i++) {
         init_char_encoding();
         int j;
-        for(j = 0; !encode_char_to_code(codes[i][j]); j++);
+        for(j = 0; !encode_char_to_code(&codes[i][j]); j++);
         morsecode_to_letter[i] = get_code();
     } 
 }
@@ -111,6 +115,12 @@ char decode_morse(uint16_t morse_code) {
     }
 }
 
+int send_char(UART_Handle uart, char letter) {
+    char sendable[] = "c\r\n";
+    sendable[0] = letter;
+    return UART_write(uart, &sendable, 4); // also sends null
+}
+
 // Power Button
 PIN_Config powerButtonConfig[] = {
    Board_BUTTON1 | PIN_INPUT_EN | PIN_PULLUP | PIN_IRQ_NEGEDGE,
@@ -120,7 +130,7 @@ PIN_Config powerButtonWakeConfig[] = {
    Board_BUTTON1 | PIN_INPUT_EN | PIN_PULLUP | PINCC26XX_WAKEUP_NEGEDGE,
    PIN_TERMINATE
 };
-Void powerFxn(PIN_Handle handle, PIN_Id pinId) {
+void powerFxn(PIN_Handle handle, PIN_Id pinId) {
    Task_sleep(100000 / Clock_tickPeriod);
 
    PIN_close(powerButtonHandle);
@@ -129,6 +139,10 @@ Void powerFxn(PIN_Handle handle, PIN_Id pinId) {
 }
 
 void buttonFxn(PIN_Handle handle, PIN_Id pinId) {
+    System_printf("buttonfxn");
+    System_flush();
+    char_to_send = ' ';
+    programState = DATA_READY;
     uint_t pinValue = PIN_getOutputValue(Board_LED0);
     pinValue = !pinValue;
     PIN_setOutputValue(ledHandle, Board_LED0, pinValue);
@@ -138,7 +152,7 @@ char readUART(UART_Handle uart) {
     char char_received;
     do {
         UART_read(uart, &char_received, 1);
-    } while(!encode_char_to_code(char_received));
+    } while(!encode_char_to_code(&char_received));
     return decode_morse(get_code());
 }
 
@@ -164,22 +178,14 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
     }
     init_morsecode_converison();
     while (1) {
-        // if(programState == DATA_READY){
-        //     char debug_msg[100];
-        //     sprintf(debug_msg,"...%f",ambientLight);
-        //     System_printf(debug_msg);
-        //     System_flush();
-        //     char echo_msg[100];
-        //     UART_write(uart, debug_msg, strlen(debug_msg));
-        //     programState = WAITING;
-        // }
+         if(programState == DATA_READY){
+             send_char(uart, char_to_send);
+             programState = WAITING;
+         }
         char debug_msg[100];
-        char char_received;
-        UART_read(uart, &char_received, 1);
-        sprintf(debug_msg, "Received: %i",char_received);
-        UART_write(uart, &debug_msg, 11);
-
-        programState = WAITING;
+        //UART_read(uart, &char_received, 1);
+        //sprintf(debug_msg, "Received: %c",char_received);
+        //UART_write(uart, &char_received, 4);
         
         Task_sleep(100000 / Clock_tickPeriod);
     }
@@ -236,7 +242,7 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
         default:
             break;
     }
-    double previous_time =  (Clock_getTicks() * Clock_tickPeriod) / 1000000; // tick period is us 1000000 us in second
+    double previous_time =  Clock_getTicks()/(100000 / Clock_tickPeriod); // tick period is us 1000000 us in second
     float rotation_x = 0.0;
     bool rotated_90 = false;
     while (1) {
@@ -244,20 +250,21 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
             // Should programState be rad and if it is DATA_READY it wouldn't be read again
             case READGYRO: {
                 float ax, ay, az, gx, gy, gz;
-                rotated_90 = false;
                 mpu9250_get_data(&i2c, &ax, &ay, &az, &gx, &gy, &gz);
-                double time = (Clock_getTicks() * Clock_tickPeriod) / 1000000; // tick period is us 1000000 us in second
+                double time = Clock_getTicks()/(100000 / Clock_tickPeriod); // tick period is us 1000000 us in second
 
                 char debug_msg[100];
-                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f\n, rotation_x %f",ax, ay, az, gx * time, gy, gz, rotation_x);
+                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f\n, rotation_x %f",ax, ay, az, gx, gy, gz, rotation_x);
                 System_printf(debug_msg);
                 System_flush();
 
-                if (fabs(gx) > 20.0) {
-                    rotation_x += gx * (time - previous_time);
+                if (fabs(gx) > 10.0) {
+                    rotation_x += floor(gx) * (time - previous_time);
                 } else {
                     rotation_x *= 0.9;
-                }
+                } 
+
+
                 previous_time = time;
                 //Detect 90 degrees rotation and 90 degrees rotation back for X-axis
                 if (!rotated_90 && fabs(rotation_x) >= 90.0) {
@@ -265,14 +272,14 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                     System_flush();
                     rotated_90 = true;
                 }
-                if (rotated_90 && fabs(rotation_x) < 10.0) {
+                if (rotated_90 && rotation_x < 10.0) {
                     System_printf("Returned to starting position on X-axis.\n");
                     System_flush();
                     rotated_90 = false;
                     rotation_x = 0.0;
+                    char_to_send = '-';
+                    programState = DATA_READY;
                 }
-
-                programState = DATA_READY;
 
                 //Change sensorState and close connection.
                 //I2C_close();
