@@ -34,6 +34,12 @@ enum state programState = WAITING;
 enum sensorReadState { MENU, READGYRO, READLIGHT };
 enum sensorReadState sensorState = READGYRO;
 
+
+//Voi tehä järkevämmin Mr SpagettiCoder Illikainen
+enum menuState {IDLE,FUN,SERIOUS};
+enum menuState menuStatus = IDLE;
+
+
 static PIN_Handle buttonHandle;
 static PIN_State buttonState;
 static PIN_Handle ledHandle;
@@ -234,7 +240,7 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
     I2C_Params i2cParams;
 
     switch (sensorState) {
-        case READGYRO:
+        case READGYRO: case MENU:
             I2C_Params_init(&i2cParams);
             i2cParams.bitRate = I2C_400kHz;
             i2cParams.custom = (uintptr_t)&i2cMPUCfg;
@@ -285,12 +291,50 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
     bool rotated_90 = false;
     float rotation_z = 0.0;
     bool rotated_90_z = false;
+    double previousTime = Clock_getTicks()/(100000 / Clock_tickPeriod);
+ 
+    //Menu related variables
+    const double menuMovementThreshold = 0.75;  //TODO: Move consts to the top of file
+    const double timerLimit = 2; // in seconds
+    double timer = 0;
     while (0) {
         switch (sensorState){
             // Should programState be rad and if it is DATA_READY it wouldn't be read again
             case MENU: {
                 float ax, ay, az, gx, gy, gz;
                 mpu9250_get_data(&i2c, &ax, &ay, &az, &gx, &gy, &gz);
+
+                if( menuStatus == IDLE && menuMovementThreshold < ax){
+                    menuStatus = SERIOUS;
+                }
+                else if(menuStatus == IDLE && ax < -menuMovementThreshold){
+                    menuStatus = FUN;
+                }
+                else if(menuStatus != IDLE){
+                    double deltaTime = Clock_getTicks()/(100000 / Clock_tickPeriod) - previous_time;
+                    previous_time = Clock_getTicks()/(100000 / Clock_tickPeriod);
+                    timer += deltaTime;
+
+
+                    if(menuStatus == SERIOUS && timer <= timerLimit &&  menuMovementThreshold < ay ){
+                        sensorState = READGYRO;
+                        menuStatus = IDLE;
+                        timer = 0;
+                    }
+                    else if(menuStatus == FUN && timer <= timerLimit && menuMovementThreshold < ay ){
+                        //sensorState play aduio
+                        menuStatus = IDLE;
+                        timer = 0;
+                    }
+                    else if(timerLimit < timer ){
+                        menuStatus = IDLE;
+                        timer = 0;
+                    }
+                }
+                else {
+                    timer = 0;
+                }
+
 
                 break;
             }
