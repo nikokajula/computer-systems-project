@@ -32,7 +32,7 @@ Char uartTaskStack[STACKSIZE];
 enum state { WAITING=1, DATA_READY };
 enum state programState = WAITING;
 enum sensorReadState { MENU, READGYRO, READLIGHT };
-enum sensorReadState sensorState = READGYRO;
+enum sensorReadState sensorState = MENU;
 
 
 //Voi tehä järkevämmin Mr SpagettiCoder Illikainen
@@ -74,7 +74,7 @@ static char char_to_send;
 static uint16_t code = 0;
 static int16_t position = 0;
 
-void init_char_encoding() {
+void init_char_encoding(void) {
     code = 0;
     position = 14;
 }
@@ -94,13 +94,15 @@ void morse_led(char letter) {
             PIN_setOutputValue(ledHandle, Board_LED0, 1);
             Task_sleep(point_period * 3 / Clock_tickPeriod);
             break;
+        default:
+            return;
     }
     PIN_setOutputValue(ledHandle, Board_LED0, 0);
     Task_sleep(point_period / Clock_tickPeriod);
 }
 
 int encode_char_to_code(char* morse) {
-    static char endchars[] = " \n\r";
+    static char endchars[] = " \r\n";
     static int endpos = 0;
     
     if(*morse == endchars[endpos]) {
@@ -117,17 +119,16 @@ int encode_char_to_code(char* morse) {
         return 0;
     if (*morse != '.' || *morse != '-')
         return 0;
-    morse_led(*morse);
     code += (*morse - 44) << position;
     position -= 2;
     return 0;
 }
 
-int get_code() {
+int get_code(void) {
     return code;
 }
 
-void init_morsecode_converison() {
+void init_morsecode_converison(void) {
     int i;
     for (i = 0; i < 36; i++) {
         init_char_encoding();
@@ -175,6 +176,8 @@ void powerFxn(PIN_Handle handle, PIN_Id pinId) {
 }
 
 void buttonFxn(PIN_Handle handle, PIN_Id pinId) {
+    uint_t led_value = PIN_getInputValue(Board_LED0);
+    PIN_setOutputValue(ledHandle, Board_LED0, !led_value);
     System_printf("buttonfxn");
     System_flush();
     char_to_send = ' ';
@@ -190,6 +193,7 @@ char readUART(UART_Handle uart) {
         sprintf(received_msg, "Received %x, which is %c\n", char_received, char_received);
         System_printf(received_msg);
         System_flush();
+        morse_led(char_received);
     } while(!encode_char_to_code(&char_received));
     return decode_morse(get_code());
 }
@@ -214,16 +218,17 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
     if (uart == NULL) {
        System_abort("Error opening the UART");
     }
-    init_morsecode_converison();
+    //init_morsecode_converison();
     while (1) {
          if(programState == DATA_READY){
              send_char(uart, char_to_send);
              programState = WAITING;
          } else {
-            char received;
-            received = readUART(uart);
-            char message[] = "decoded letter:  \n";
-            message[16] = received;
+            char received[] = "123";
+            UART_read(uart, &received, 3);
+            //morse_led(received);
+            char message[100];
+            sprintf(message, "Hex %x %x %x char %s", received[0], received[1], received[2], received);
             System_printf(message);
             System_flush();
          }
@@ -294,15 +299,19 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
     double previousTime = Clock_getTicks()/(100000 / Clock_tickPeriod);
  
     //Menu related variables
-    const double menuMovementThreshold = 0.75;  //TODO: Move consts to the top of file
-    const double timerLimit = 2; // in seconds
+    const double menuMovementThreshold = 0.50;  //TODO: Move consts to the top of file
+    const double timerLimit = 100; // in deciseconds
     double timer = 0;
+    char debug_msg[100];
     while (0) {
         switch (sensorState){
             // Should programState be rad and if it is DATA_READY it wouldn't be read again
             case MENU: {
                 float ax, ay, az, gx, gy, gz;
                 mpu9250_get_data(&i2c, &ax, &ay, &az, &gx, &gy, &gz);
+                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f",ax, ay, az, gx, gy, gz);
+                System_printf(debug_msg);
+                System_flush();
 
                 if( menuStatus == IDLE && menuMovementThreshold < ax){
                     menuStatus = SERIOUS;
@@ -314,7 +323,9 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                     double deltaTime = Clock_getTicks()/(100000 / Clock_tickPeriod) - previous_time;
                     previous_time = Clock_getTicks()/(100000 / Clock_tickPeriod);
                     timer += deltaTime;
-
+                    sprintf(debug_msg,"Delta time: %f timer: %f", deltaTime, timer);
+                    System_printf(debug_msg);
+                    System_flush();
 
                     if(menuStatus == SERIOUS && timer <= timerLimit &&  menuMovementThreshold < ay ){
                         sensorState = READGYRO;
@@ -341,10 +352,16 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
             case READGYRO: {
                 float ax, ay, az, gx, gy, gz;
                 mpu9250_get_data(&i2c, &ax, &ay, &az, &gx, &gy, &gz);
+                if(ax < - 0.75 && ay < 0.1 && az < 0.1 && gx < 1 && gy < 1 && gz < 1){
+                    sensorState = MENU;
+                }
+
                 double time = Clock_getTicks()/(100000 / Clock_tickPeriod); // tick period is us 1000000 us in second
 
-                char debug_msg[100];
-                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f\n, rotation_x %f",ax, ay, az, gx, gy, gz, rotation_x);
+                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f",ax, ay, az, gx, gy, gz);
+                System_printf(debug_msg);
+                System_flush();
+                sprintf(debug_msg, "rotation_x %f, rotation_z %f", rotation_x, rotation_z);
                 System_printf(debug_msg);
                 System_flush();
 
@@ -354,8 +371,6 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                     rotation_x *= 0.9;
                 } 
 
-
-                previous_time = time;
                 //Detect 90 degrees rotation and 90 degrees rotation back for X-axis
                 if (!rotated_90 && fabs(rotation_x) >= 90.0) {
                     System_printf("90-degree rotation detected on X-axis!\n");
@@ -390,7 +405,7 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                     char_to_send = '.';
                     programState = DATA_READY;
                 }
-
+                previous_time = time;
                 break;
             }
             case READLIGHT: {
@@ -413,9 +428,10 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                 break;
             }
         }
-        Task_sleep(100000 / Clock_tickPeriod);
+        Task_sleep(10000 / Clock_tickPeriod);
     }
 }
+
 
 Int main(void) {
     Task_Handle sensorTaskHandle;
