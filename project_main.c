@@ -20,6 +20,8 @@
 #include <ti/drivers/UART.h>
 #include <ti/drivers/i2c/I2CCC26XX.h>
 
+#include "buzzer.h"
+
 /* Board Header files */
 #include "Board.h"
 #include "sensors/opt3001.h"
@@ -28,6 +30,8 @@
 #define STACKSIZE 2048
 Char sensorTaskStack[STACKSIZE];
 Char uartTaskStack[STACKSIZE];
+Char uartTaskStackWrite[STACKSIZE];
+Char taskStack[STACKSIZE];
 
 enum state { WAITING=1, DATA_READY };
 enum state programState = WAITING;
@@ -48,9 +52,27 @@ static PIN_Handle hMpuPin;
 static PIN_Handle powerButtonHandle;
 static PIN_State powerButtonState;
 
+const int max_morsecode_length = 5;
+char morsecode_to_letter[36];
+char codes[36][5] = {".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--..", "-----", ".----", "..---", "...--", "....-", ".....", "-....", "--...", "---..", "----."};
+const int code_length = 16;
+
+static char char_to_send;
+
+static uint16_t code = 0;
+static int16_t position = 0;
+
 float ambientLight = -1000.0;
 
-// Light Button
+//Buzzer
+static PIN_Handle hBuzzer;
+static PIN_State sBuzzer;
+PIN_Config cBuzzer[] = {
+  Board_BUZZER | PIN_GPIO_OUTPUT_EN | PIN_GPIO_LOW | PIN_PUSHPULL | PIN_DRVSTR_MAX,
+  PIN_TERMINATE
+};
+
+// Light Button / Send " " Button
 PIN_Config buttonConfig[] = {
    Board_BUTTON0  | PIN_INPUT_EN | PIN_PULLUP | PIN_IRQ_NEGEDGE,
    PIN_TERMINATE
@@ -59,20 +81,40 @@ PIN_Config ledConfig[] = {
    Board_LED0 | PIN_GPIO_OUTPUT_EN | PIN_GPIO_LOW | PIN_PUSHPULL | PIN_DRVSTR_MAX,
    PIN_TERMINATE
 };
+void buttonFxn(PIN_Handle handle, PIN_Id pinId) {
+    //uint_t led_value = PIN_getInputValue(Board_LED0);
+    //PIN_setOutputValue(ledHandle, Board_LED0, !led_value);
+    PIN_setOutputValue(ledHandle, Board_LED0, 1);
+    System_printf("buttonfxn");
+    System_flush();
+    char_to_send = ' ';
+    programState = DATA_READY;
+    Task_sleep(10000 / Clock_tickPeriod);
+    PIN_setOutputValue(ledHandle, Board_LED0, 0);
+}
+
+//Power Button
+PIN_Config powerButtonConfig[] = {
+   Board_BUTTON1 | PIN_INPUT_EN | PIN_PULLUP | PIN_IRQ_NEGEDGE,
+   PIN_TERMINATE
+};
+PIN_Config powerButtonWakeConfig[] = {
+   Board_BUTTON1 | PIN_INPUT_EN | PIN_PULLUP | PINCC26XX_WAKEUP_NEGEDGE,
+   PIN_TERMINATE
+};
+void powerFxn(PIN_Handle handle, PIN_Id pinId) {
+   Task_sleep(100000 / Clock_tickPeriod);
+
+   PIN_close(powerButtonHandle);
+   PINCC26XX_setWakeup(powerButtonWakeConfig);
+   Power_shutdown(NULL,0);
+}
+
 // I2C config for reading gyro and accelerometer (should we have another const for other configs?)
 static const I2CCC26XX_I2CPinCfg i2cMPUCfg = {
     .pinSDA = Board_I2C0_SDA1,
     .pinSCL = Board_I2C0_SCL1
 };
-const int max_morsecode_length = 5;
-char morsecode_to_letter[36];
-char codes[36][5] = {".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--..", "-----", ".----", "..---", "...--", "....-", ".....", "-....", "--...", "---..", "----."}; 
-const int code_length = 16;
-
-static char char_to_send;
-
-static uint16_t code = 0;
-static int16_t position = 0;
 
 void init_char_encoding(void) {
     code = 0;
@@ -80,7 +122,7 @@ void init_char_encoding(void) {
 }
 
 void morse_led(char letter) {
-    const int point_period = 400000;
+    const int point_period = 40000;
     switch (letter) {
         case ' ':
             PIN_setOutputValue(ledHandle, Board_LED0, 0);
@@ -158,32 +200,6 @@ int send_char(UART_Handle uart, char letter) {
     return UART_write(uart, &sendable, 4); // also sends null
 }
 
-// Power Button
-PIN_Config powerButtonConfig[] = {
-   Board_BUTTON1 | PIN_INPUT_EN | PIN_PULLUP | PIN_IRQ_NEGEDGE,
-   PIN_TERMINATE
-};
-PIN_Config powerButtonWakeConfig[] = {
-   Board_BUTTON1 | PIN_INPUT_EN | PIN_PULLUP | PINCC26XX_WAKEUP_NEGEDGE,
-   PIN_TERMINATE
-};
-void powerFxn(PIN_Handle handle, PIN_Id pinId) {
-   Task_sleep(100000 / Clock_tickPeriod);
-
-   PIN_close(powerButtonHandle);
-   PINCC26XX_setWakeup(powerButtonWakeConfig);
-   Power_shutdown(NULL,0);
-}
-
-void buttonFxn(PIN_Handle handle, PIN_Id pinId) {
-    uint_t led_value = PIN_getInputValue(Board_LED0);
-    PIN_setOutputValue(ledHandle, Board_LED0, !led_value);
-    System_printf("buttonfxn");
-    System_flush();
-    char_to_send = ' ';
-    programState = DATA_READY;
-}
-
 char readUART(UART_Handle uart) {
     init_char_encoding();
     char char_received;
@@ -198,8 +214,46 @@ char readUART(UART_Handle uart) {
     return decode_morse(get_code());
 }
 
-/* Task Functions */
-Void uartTaskFxn(UArg arg0, UArg arg1) {
+//UART TASK
+
+char UARTBuffer[1];
+#define BUFFER_SIZE 256
+
+typedef struct {
+    uint8_t data[BUFFER_SIZE];
+    volatile uint16_t head;
+    volatile uint16_t tail;
+} RingBuffer;
+
+RingBuffer uartBuffer = { .head = 0, .tail = 0 };
+
+void RingBuffer_Write(RingBuffer *buffer, uint8_t byte) {
+    uint16_t next = (buffer->head + 1) % BUFFER_SIZE;
+
+    if (next != buffer->tail) {
+        buffer->data[buffer->head] = byte;
+        buffer->head = next;
+    }
+}
+
+int RingBuffer_Read(RingBuffer *buffer, uint8_t *byte) {
+    if (buffer->head == buffer->tail) {
+        return -1;
+    }
+    *byte = buffer->data[buffer->tail];
+    buffer->tail = (buffer->tail + 1) % BUFFER_SIZE;
+    return 0;
+}
+
+void uartReadCallback(UART_Handle uart, void *buffer, size_t count) {
+    char receivedChar = *((char *)buffer);
+
+    RingBuffer_Write(&uartBuffer, (uint8_t)receivedChar);
+
+    UART_read(uart, UARTBuffer, 1);
+}
+
+Void uartTaskFxnRead(UArg arg0, UArg arg1) {
 
     UART_Handle uart;
     UART_Params uartParams;
@@ -207,38 +261,42 @@ Void uartTaskFxn(UArg arg0, UArg arg1) {
     UART_Params_init(&uartParams);
     uartParams.writeDataMode = UART_DATA_TEXT;
     uartParams.readDataMode = UART_DATA_TEXT;
-    uartParams.readEcho = UART_ECHO_ON;
-    uartParams.readMode = UART_MODE_BLOCKING;
+    uartParams.readEcho = UART_ECHO_OFF;
+    uartParams.readMode = UART_MODE_CALLBACK;
     uartParams.baudRate = 9600;
     uartParams.dataLength = UART_LEN_8;
     uartParams.parityType = UART_PAR_NONE;
     uartParams.stopBits = UART_STOP_ONE;
+    uartParams.readCallback = uartReadCallback;
 
     uart = UART_open(Board_UART0, &uartParams);
     if (uart == NULL) {
-       System_abort("Error opening the UART");
+       System_abort("Error opening the UART read");
     }
-    //init_morsecode_converison();
+
+    UART_read(uart, UARTBuffer, 1);
+
     while (1) {
-         if(programState == DATA_READY){
-             send_char(uart, char_to_send);
-             programState = WAITING;
-         } else {
-            char received[] = "123";
-            UART_read(uart, &received, 3);
-            //morse_led(received);
+        uint8_t byte;
+        while (RingBuffer_Read(&uartBuffer, &byte) == 0) {
+            morse_led(byte);
+
             char message[100];
-            sprintf(message, "Hex %x %x %x char %s", received[0], received[1], received[2], received);
-            System_printf(message);
+            sprintf(message, "Processed %c", byte);
+            System_printf("%s\n", message);
             System_flush();
-         }
-        //UART_read(uart, &char_received, 1);
-        //sprintf(debug_msg, "Received: %c",char_received);
-        //UART_write(uart, &char_received, 4);
-        
-        Task_sleep(100000 / Clock_tickPeriod);
+        }
+
+        if (programState == DATA_READY) {
+           send_char(uart, char_to_send);
+           programState = WAITING;
+       }
+
+       Task_sleep(100000 / Clock_tickPeriod);
     }
 }
+
+//SENSOR TASK
 
 Void sensorTaskFxn(UArg arg0, UArg arg1) {
     I2C_Handle i2c;
@@ -291,7 +349,7 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
         default:
             break;
     }
-    double previous_time =  Clock_getTicks()/(100000 / Clock_tickPeriod); // tick period is us 1000000 us in second
+    double previous_time =  Clock_getTicks()/(10000 / Clock_tickPeriod); // tick period is us 1000000 us in second
     float rotation_x = 0.0;
     bool rotated_90 = false;
     float rotation_z = 0.0;
@@ -299,35 +357,41 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
     double previousTime = Clock_getTicks()/(100000 / Clock_tickPeriod);
  
     //Menu related variables
-    const double menuMovementThreshold = 0.50;  //TODO: Move consts to the top of file
-    const double timerLimit = 100; // in deciseconds
+    const double menuMovementThreshold = 0.40;  //TODO: Move consts to the top of file
+    const double timerLimit = 5000; // in deciseconds
     double timer = 0;
     char debug_msg[100];
-    while (0) {
+    while (1) {
         switch (sensorState){
             // Should programState be rad and if it is DATA_READY it wouldn't be read again
             case MENU: {
+                PIN_setOutputValue(ledHandle, Board_LED0, 1);
                 float ax, ay, az, gx, gy, gz;
                 mpu9250_get_data(&i2c, &ax, &ay, &az, &gx, &gy, &gz);
-                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f",ax, ay, az, gx, gy, gz);
+                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f\n",ax, ay, az, gx, gy, gz);
                 System_printf(debug_msg);
                 System_flush();
 
                 if( menuStatus == IDLE && menuMovementThreshold < ax){
+                    buzzerOpen(hBuzzer);
+                    buzzerSetFrequency(2000);
+                    Task_sleep(500000 / Clock_tickPeriod);
+                    buzzerClose();
                     menuStatus = SERIOUS;
                 }
                 else if(menuStatus == IDLE && ax < -menuMovementThreshold){
-                    menuStatus = FUN;
+                    //menuStatus = FUN;
                 }
                 else if(menuStatus != IDLE){
-                    double deltaTime = Clock_getTicks()/(100000 / Clock_tickPeriod) - previous_time;
-                    previous_time = Clock_getTicks()/(100000 / Clock_tickPeriod);
+                    double deltaTime = Clock_getTicks()/(10000 / Clock_tickPeriod) - previous_time;
+                    previous_time = Clock_getTicks()/(10000 / Clock_tickPeriod);
                     timer += deltaTime;
                     sprintf(debug_msg,"Delta time: %f timer: %f", deltaTime, timer);
                     System_printf(debug_msg);
                     System_flush();
 
                     if(menuStatus == SERIOUS && timer <= timerLimit &&  menuMovementThreshold < ay ){
+                        PIN_setOutputValue(ledHandle, Board_LED0, 0);
                         sensorState = READGYRO;
                         menuStatus = IDLE;
                         timer = 0;
@@ -338,6 +402,14 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                         timer = 0;
                     }
                     else if(timerLimit < timer ){
+                        buzzerOpen(hBuzzer);
+                        buzzerSetFrequency(2000);
+                        Task_sleep(500000 / Clock_tickPeriod);
+                        buzzerClose();
+                        buzzerOpen(hBuzzer);
+                        buzzerSetFrequency(2000);
+                        Task_sleep(500000 / Clock_tickPeriod);
+                        buzzerClose();
                         menuStatus = IDLE;
                         timer = 0;
                     }
@@ -350,62 +422,52 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                 break;
             }
             case READGYRO: {
+                float threshold = 0.4f;
+                float threshold_z = 1.3f;
                 float ax, ay, az, gx, gy, gz;
                 mpu9250_get_data(&i2c, &ax, &ay, &az, &gx, &gy, &gz);
-                if(ax < - 0.75 && ay < 0.1 && az < 0.1 && gx < 1 && gy < 1 && gz < 1){
+                if (ax > 0.9f && ay < 0.1f && az < 0.1f && gx < 1.0f && gy < 1.0f && gz < 1.0f){
+                    buzzerOpen(hBuzzer);
+                    buzzerSetFrequency(2000);
+                    Task_sleep(100000 / Clock_tickPeriod);
+                    buzzerClose();
+
                     sensorState = MENU;
                 }
+                double time = Clock_getTicks()/(10000 / Clock_tickPeriod);
 
-                double time = Clock_getTicks()/(100000 / Clock_tickPeriod); // tick period is us 1000000 us in second
-
-                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f",ax, ay, az, gx, gy, gz);
-                System_printf(debug_msg);
-                System_flush();
-                sprintf(debug_msg, "rotation_x %f, rotation_z %f", rotation_x, rotation_z);
+                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f\n",ax, ay, az, gx, gy, gz);
                 System_printf(debug_msg);
                 System_flush();
 
-                if (fabs(gx) > 10.0) {
-                    rotation_x += floor(gx) * (time - previous_time);
-                } else {
-                    rotation_x *= 0.9;
-                } 
-
-                //Detect 90 degrees rotation and 90 degrees rotation back for X-axis
-                if (!rotated_90 && fabs(rotation_x) >= 90.0) {
-                    System_printf("90-degree rotation detected on X-axis!\n");
-                    System_flush();
+                if(ax > threshold && ay < threshold && !rotated_90 && !rotated_90_z && az < 1.1f){
+                    buzzerOpen(hBuzzer);
+                    buzzerSetFrequency(2000);
+                    Task_sleep(100000 / Clock_tickPeriod);
+                    buzzerClose();
                     rotated_90 = true;
+                    char_to_send = '.';
+                    programState = DATA_READY;
                 }
-                if (rotated_90 && rotation_x < 10.0) {
-                    System_printf("Returned to starting position on X-axis.\n");
-                    System_flush();
-                    rotated_90 = false;
-                    rotation_x = 0.0;
+
+                if(az > threshold_z && ax < threshold && !rotated_90_z && !rotated_90){
+                    buzzerOpen(hBuzzer);
+                    buzzerSetFrequency(2000);
+                    Task_sleep(500000 / Clock_tickPeriod);
+                    buzzerClose();
+                    rotated_90_z = true;
                     char_to_send = '-';
                     programState = DATA_READY;
                 }
 
-                if (fabs(gz) > 10.0) {
-                    rotation_z += floor(gz) * (time - previous_time);
-                } else {
-                    rotation_z *= 0.9;
-                } 
-
-                if (!rotated_90_z && fabs(rotation_z) >= 90.0) {
-                    System_printf("90-degree rotation detected on Z-axis!\n");
-                    System_flush();
-                    rotated_90_z = true;
-                }
-                if (rotated_90_z && rotation_z < 10.0) {
-                    System_printf("Returned to starting position on Z-axis.\n");
-                    System_flush();
+                if(rotated_90_z && az < threshold_z){
                     rotated_90_z = false;
-                    rotation_z = 0.0;
-                    char_to_send = '.';
-                    programState = DATA_READY;
                 }
-                previous_time = time;
+
+                if(rotated_90 && ax < threshold){
+                    rotated_90 = false;
+                }
+
                 break;
             }
             case READLIGHT: {
@@ -428,22 +490,47 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                 break;
             }
         }
-        Task_sleep(10000 / Clock_tickPeriod);
+        Task_sleep(100000 / Clock_tickPeriod);
     }
 }
 
+//BUZZER TASK
+
+Void taskFxn(UArg arg0, UArg arg1) {
+
+  while (1) {
+    buzzerOpen(hBuzzer);
+    buzzerSetFrequency(2000);
+    Task_sleep(50000 / Clock_tickPeriod);
+    buzzerClose();
+
+    Task_sleep(950000 / Clock_tickPeriod);
+  }
+
+}
+
+
+//MAIN PROGRAM AND INITS
 
 Int main(void) {
+    //SensorTask
     Task_Handle sensorTaskHandle;
     Task_Params sensorTaskParams;
+
+    //Uart
     Task_Handle uartTaskHandle;
     Task_Params uartTaskParams;
 
+    //Buzzer
+    Task_Handle task;
+    Task_Params taskParams;
+
+    //Inits
     Board_initGeneral();
     Board_initI2C();
     Board_initUART();
 
-    // Led Init + Interruption init
+    // Button and led inits
     buttonHandle = PIN_open(&buttonState, buttonConfig);
     if(!buttonHandle) {
        System_abort("Error initializing button pins\n");
@@ -455,15 +542,15 @@ Int main(void) {
     if (PIN_registerIntCb(buttonHandle, &buttonFxn) != 0) {
        System_abort("Error registering button callback function");
     }
-    // Power button init
-    powerButtonHandle = PIN_open(&powerButtonState, powerButtonConfig);
+    /*powerButtonHandle = PIN_open(&powerButtonState, powerButtonConfig);
     if(!powerButtonHandle) {
         System_abort("Error initializing power button\n");
     }
     if (PIN_registerIntCb(powerButtonHandle, &powerFxn) != 0) {
         System_abort("Error registering power button callback");
-    }
+    }*/
 
+    //Task Inits
     Task_Params_init(&sensorTaskParams);
     sensorTaskParams.stackSize = STACKSIZE;
     sensorTaskParams.stack = &sensorTaskStack;
@@ -477,12 +564,25 @@ Int main(void) {
     uartTaskParams.stackSize = STACKSIZE;
     uartTaskParams.stack = &uartTaskStack;
     uartTaskParams.priority=2;
-    uartTaskHandle = Task_create(uartTaskFxn, &uartTaskParams, NULL);
+    uartTaskHandle = Task_create(uartTaskFxnRead, &uartTaskParams, NULL);
     if (uartTaskHandle == NULL) {
         System_abort("Task create failed!");
     }
 
-    /* Sanity check */
+    /*hBuzzer = PIN_open(&sBuzzer, cBuzzer);
+    if (hBuzzer == NULL) {
+        System_abort("Pin open failed!");
+    }
+
+    Task_Params_init(&taskParams);
+    taskParams.stackSize = STACKSIZE;
+    taskParams.stack = &taskStack;
+    task = Task_create((Task_FuncPtr)taskFxn, &taskParams, NULL);
+    if (task == NULL) {
+        System_abort("Task create failed!");
+    }*/
+
+    //Sanity Check
     System_printf("Hello world!\n");
     System_flush();
 
