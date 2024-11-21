@@ -1,3 +1,5 @@
+//Modified by Juuso Kärnä, Niko Kajula and Topias Illikainen for Computer Systems Group Work
+
 /* C Standard library */
 #include <stdio.h>
 
@@ -50,7 +52,6 @@ static PIN_Handle ledHandle;
 static PIN_State ledState;
 static PIN_Handle hMpuPin;
 static PIN_Handle powerButtonHandle;
-static PIN_State powerButtonState;
 
 const int max_morsecode_length = 5;
 char morsecode_to_letter[36];
@@ -58,9 +59,6 @@ char codes[36][5] = {".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", ".
 const int code_length = 16;
 
 static char char_to_send;
-
-static uint16_t code = 0;
-static int16_t position = 0;
 
 float ambientLight = -1000.0;
 
@@ -116,11 +114,6 @@ static const I2CCC26XX_I2CPinCfg i2cMPUCfg = {
     .pinSCL = Board_I2C0_SCL1
 };
 
-void init_char_encoding(void) {
-    code = 0;
-    position = 14;
-}
-
 void morse_led(char letter) {
     const int point_period = 40000;
     switch (letter) {
@@ -143,75 +136,10 @@ void morse_led(char letter) {
     Task_sleep(point_period / Clock_tickPeriod);
 }
 
-int encode_char_to_code(char* morse) {
-    static char endchars[] = " \r\n";
-    static int endpos = 0;
-    
-    if(*morse == endchars[endpos]) {
-        if(endpos++ == 2) {
-            endpos = 0;
-            morse_led(' ');
-            return 1;
-        }
-    } else {
-        endpos = 0;
-    }
-
-    if(position < 0) 
-        return 0;
-    if (*morse != '.' || *morse != '-')
-        return 0;
-    code += (*morse - 44) << position;
-    position -= 2;
-    return 0;
-}
-
-int get_code(void) {
-    return code;
-}
-
-void init_morsecode_converison(void) {
-    int i;
-    for (i = 0; i < 36; i++) {
-        init_char_encoding();
-        int j;
-        for(j = 0; !encode_char_to_code(&codes[i][j]); j++);
-        morsecode_to_letter[i] = get_code();
-    } 
-}
-
-char decode_morse(uint16_t morse_code) {
-    int i;
-    for (i = 0; i < 36; i++) {
-        if (morsecode_to_letter[i] == morse_code) {
-            if(i < 26) {
-                return i + 'a';
-            } else {
-                return i + 22;
-            }
-        }
-    }
-    return '?';
-}
-
 int send_char(UART_Handle uart, char letter) {
     char sendable[] = "c\r\n";
     sendable[0] = letter;
     return UART_write(uart, &sendable, 4); // also sends null
-}
-
-char readUART(UART_Handle uart) {
-    init_char_encoding();
-    char char_received;
-    do {
-        UART_read(uart, &char_received, 1);
-        char received_msg[100];
-        sprintf(received_msg, "Received %x, which is %c\n", char_received, char_received);
-        System_printf(received_msg);
-        System_flush();
-        morse_led(char_received);
-    } while(!encode_char_to_code(&char_received));
-    return decode_morse(get_code());
 }
 
 //UART TASK
@@ -296,6 +224,20 @@ Void uartTaskFxnRead(UArg arg0, UArg arg1) {
     }
 }
 
+Double music[] = {65.4, 65.4, 65.4, 82.4, 73.4, 73.4, 73.4, 87.3, 82.4, 82.4, 73.4, 73.4, 65.4};
+//BUZZER TASK
+
+Void playMusicTask(UArg arg0, UArg arg1) {
+    buzzerOpen(hBuzzer);
+    int i = 0;
+    for (i = 0; i < 13; i++){
+        buzzerSetFrequency(music[i] * 5);
+        Task_sleep(250000 / Clock_tickPeriod);
+    }
+    buzzerClose();
+    Task_sleep(950000 / Clock_tickPeriod);
+}
+
 //SENSOR TASK
 
 Void sensorTaskFxn(UArg arg0, UArg arg1) {
@@ -336,7 +278,7 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
 
             i2c = I2C_open(Board_I2C_TMP, &i2cParams);
             if (i2c == NULL) {
-            System_abort("Error Initializing I2C\n");
+                System_abort("Error Initializing I2C\n");
             }
 
             System_printf("OPT3001: Setup and calibration...\n");
@@ -350,9 +292,7 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
             break;
     }
     double previous_time =  Clock_getTicks()/(10000 / Clock_tickPeriod); // tick period is us 1000000 us in second
-    float rotation_x = 0.0;
     bool rotated_90 = false;
-    float rotation_z = 0.0;
     bool rotated_90_z = false;
     double previousTime = Clock_getTicks()/(100000 / Clock_tickPeriod);
  
@@ -368,9 +308,6 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                 PIN_setOutputValue(ledHandle, Board_LED0, 1);
                 float ax, ay, az, gx, gy, gz;
                 mpu9250_get_data(&i2c, &ax, &ay, &az, &gx, &gy, &gz);
-                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f\n",ax, ay, az, gx, gy, gz);
-                System_printf(debug_msg);
-                System_flush();
 
                 if( menuStatus == IDLE && menuMovementThreshold < ax){
                     buzzerOpen(hBuzzer);
@@ -378,6 +315,7 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                     Task_sleep(500000 / Clock_tickPeriod);
                     buzzerClose();
                     menuStatus = SERIOUS;
+                    System_flush();
                 }
                 else if(menuStatus == IDLE && ax < -menuMovementThreshold){
                     //menuStatus = FUN;
@@ -398,8 +336,6 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                     }
                     else if(menuStatus == FUN && timer <= timerLimit && menuMovementThreshold < ay ){
                         //sensorState play aduio
-                        menuStatus = IDLE;
-                        timer = 0;
                     }
                     else if(timerLimit < timer ){
                         buzzerOpen(hBuzzer);
@@ -417,8 +353,6 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                 else {
                     timer = 0;
                 }
-
-
                 break;
             }
             case READGYRO: {
@@ -435,10 +369,6 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                     sensorState = MENU;
                 }
                 double time = Clock_getTicks()/(10000 / Clock_tickPeriod);
-
-                sprintf(debug_msg,"ax: %f, ay: %f, az: %f, gx: %f, gy: %f, gz: %f\n",ax, ay, az, gx, gy, gz);
-                System_printf(debug_msg);
-                System_flush();
 
                 if(ax > threshold && ay < threshold && !rotated_90 && !rotated_90_z && az < 1.1f){
                     buzzerOpen(hBuzzer);
@@ -494,22 +424,6 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
     }
 }
 
-//BUZZER TASK
-
-Void taskFxn(UArg arg0, UArg arg1) {
-
-  while (1) {
-    buzzerOpen(hBuzzer);
-    buzzerSetFrequency(2000);
-    Task_sleep(50000 / Clock_tickPeriod);
-    buzzerClose();
-
-    Task_sleep(950000 / Clock_tickPeriod);
-  }
-
-}
-
-
 //MAIN PROGRAM AND INITS
 
 Int main(void) {
@@ -560,6 +474,11 @@ Int main(void) {
         System_abort("Task create failed!");
     }
 
+    hBuzzer = PIN_open(&sBuzzer, cBuzzer);
+    if (hBuzzer == NULL) {
+        System_abort("Pin open failed!");
+    }
+
     Task_Params_init(&uartTaskParams);
     uartTaskParams.stackSize = STACKSIZE;
     uartTaskParams.stack = &uartTaskStack;
@@ -569,24 +488,17 @@ Int main(void) {
         System_abort("Task create failed!");
     }
 
-    /*hBuzzer = PIN_open(&sBuzzer, cBuzzer);
-    if (hBuzzer == NULL) {
-        System_abort("Pin open failed!");
-    }
-
     Task_Params_init(&taskParams);
     taskParams.stackSize = STACKSIZE;
     taskParams.stack = &taskStack;
-    task = Task_create((Task_FuncPtr)taskFxn, &taskParams, NULL);
+    taskParams.priority=2;
+    task = Task_create(playMusicTask, &taskParams, NULL);
     if (task == NULL) {
         System_abort("Task create failed!");
-    }*/
-
+    }
     //Sanity Check
     System_printf("Hello world!\n");
     System_flush();
-
     BIOS_start();
-
-    return (0);
+    return 0;
 }

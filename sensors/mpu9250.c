@@ -1,3 +1,5 @@
+//Modified by Juuso Kärnä, Niko Kajula and Topias Illikainen for Computer Systems Group Work
+
 /* 
  * mpu9250.c
  *
