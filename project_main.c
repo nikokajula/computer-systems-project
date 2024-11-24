@@ -42,7 +42,7 @@ enum sensorReadState sensorState = MENU;
 
 
 //Voi tehä järkevämmin Mr SpagettiCoder Illikainen
-enum menuState {IDLE,FUN,SERIOUS};
+enum menuState {IDLE,SERIOUS};
 enum menuState menuStatus = IDLE;
 
 
@@ -52,11 +52,6 @@ static PIN_Handle ledHandle;
 static PIN_State ledState;
 static PIN_Handle hMpuPin;
 static PIN_Handle powerButtonHandle;
-
-const int max_morsecode_length = 5;
-char morsecode_to_letter[36];
-char codes[36][5] = {".-", "-...", "-.-.", "-..", ".", "..-.", "--.", "....", "..", ".---", "-.-", ".-..", "--", "-.", "---", ".--.", "--.-", ".-.", "...", "-", "..-", "...-", ".--", "-..-", "-.--", "--..", "-----", ".----", "..---", "...--", "....-", ".....", "-....", "--...", "---..", "----."};
-const int code_length = 16;
 
 static char char_to_send;
 
@@ -80,8 +75,6 @@ PIN_Config ledConfig[] = {
    PIN_TERMINATE
 };
 void buttonFxn(PIN_Handle handle, PIN_Id pinId) {
-    //uint_t led_value = PIN_getInputValue(Board_LED0);
-    //PIN_setOutputValue(ledHandle, Board_LED0, !led_value);
     PIN_setOutputValue(ledHandle, Board_LED0, 1);
     System_printf("buttonfxn");
     System_flush();
@@ -181,7 +174,7 @@ void uartReadCallback(UART_Handle uart, void *buffer, size_t count) {
     UART_read(uart, UARTBuffer, 1);
 }
 
-Void uartTaskFxnRead(UArg arg0, UArg arg1) {
+void uartTaskFxnRead(UArg arg0, UArg arg1) {
 
     UART_Handle uart;
     UART_Params uartParams;
@@ -204,7 +197,7 @@ Void uartTaskFxnRead(UArg arg0, UArg arg1) {
 
     UART_read(uart, UARTBuffer, 1);
 
-    while (1) {
+    while (true) {
         uint8_t byte;
         while (RingBuffer_Read(&uartBuffer, &byte) == 0) {
             morse_led(byte);
@@ -223,11 +216,10 @@ Void uartTaskFxnRead(UArg arg0, UArg arg1) {
        Task_sleep(100000 / Clock_tickPeriod);
     }
 }
-
+// Ukko nooa
 Double music[] = {65.4, 65.4, 65.4, 82.4, 73.4, 73.4, 73.4, 87.3, 82.4, 82.4, 73.4, 73.4, 65.4};
 //BUZZER TASK
-
-Void playMusicTask(UArg arg0, UArg arg1) {
+void playMusicTask(UArg arg0, UArg arg1) {
     buzzerOpen(hBuzzer);
     int i = 0;
     for (i = 0; i < 13; i++){
@@ -239,8 +231,7 @@ Void playMusicTask(UArg arg0, UArg arg1) {
 }
 
 //SENSOR TASK
-
-Void sensorTaskFxn(UArg arg0, UArg arg1) {
+void sensorTaskFxn(UArg arg0, UArg arg1) {
     I2C_Handle i2c;
     I2C_Params i2cParams;
 
@@ -294,14 +285,13 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
     double previous_time =  Clock_getTicks()/(10000 / Clock_tickPeriod); // tick period is us 1000000 us in second
     bool rotated_90 = false;
     bool rotated_90_z = false;
-    double previousTime = Clock_getTicks()/(100000 / Clock_tickPeriod);
  
     //Menu related variables
-    const double menuMovementThreshold = 0.40;  //TODO: Move consts to the top of file
-    const double timerLimit = 5000; // in deciseconds
+    const double menuMovementThreshold = 0.40;
+    const double timerLimit = 1000; // in deciseconds
     double timer = 0;
     char debug_msg[100];
-    while (1) {
+    while (true) {
         switch (sensorState){
             // Should programState be rad and if it is DATA_READY it wouldn't be read again
             case MENU: {
@@ -320,6 +310,7 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                 else if(menuStatus == IDLE && ax < -menuMovementThreshold){
                     //menuStatus = FUN;
                 }
+
                 else if(menuStatus != IDLE){
                     double deltaTime = Clock_getTicks()/(10000 / Clock_tickPeriod) - previous_time;
                     previous_time = Clock_getTicks()/(10000 / Clock_tickPeriod);
@@ -333,9 +324,6 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                         sensorState = READGYRO;
                         menuStatus = IDLE;
                         timer = 0;
-                    }
-                    else if(menuStatus == FUN && timer <= timerLimit && menuMovementThreshold < ay ){
-                        //sensorState play aduio
                     }
                     else if(timerLimit < timer ){
                         buzzerOpen(hBuzzer);
@@ -360,6 +348,7 @@ Void sensorTaskFxn(UArg arg0, UArg arg1) {
                 float threshold_z = 1.3f;
                 float ax, ay, az, gx, gy, gz;
                 mpu9250_get_data(&i2c, &ax, &ay, &az, &gx, &gy, &gz);
+
                 if (ax > 0.9f && ay < 0.1f && az < 0.1f && gx < 1.0f && gy < 1.0f && gz < 1.0f){
                     buzzerOpen(hBuzzer);
                     buzzerSetFrequency(2000);
@@ -436,8 +425,8 @@ Int main(void) {
     Task_Params uartTaskParams;
 
     //Buzzer
-    Task_Handle task;
-    Task_Params taskParams;
+    Task_Handle musicTaskHandle;
+    Task_Params musicTaskParams;
 
     //Inits
     Board_initGeneral();
@@ -456,13 +445,6 @@ Int main(void) {
     if (PIN_registerIntCb(buttonHandle, &buttonFxn) != 0) {
        System_abort("Error registering button callback function");
     }
-    /*powerButtonHandle = PIN_open(&powerButtonState, powerButtonConfig);
-    if(!powerButtonHandle) {
-        System_abort("Error initializing power button\n");
-    }
-    if (PIN_registerIntCb(powerButtonHandle, &powerFxn) != 0) {
-        System_abort("Error registering power button callback");
-    }*/
 
     //Task Inits
     Task_Params_init(&sensorTaskParams);
@@ -488,14 +470,15 @@ Int main(void) {
         System_abort("Task create failed!");
     }
 
-    Task_Params_init(&taskParams);
-    taskParams.stackSize = STACKSIZE;
-    taskParams.stack = &taskStack;
-    taskParams.priority=2;
-    task = Task_create(playMusicTask, &taskParams, NULL);
-    if (task == NULL) {
+    Task_Params_init(&musicTaskParams);
+    musicTaskParams.stackSize = STACKSIZE;
+    musicTaskParams.stack = &taskStack;
+    musicTaskParams.priority=2;
+    musicTaskHandle = Task_create(playMusicTask, &musicTaskParams, NULL);
+    if (musicTaskHandle == NULL) {
         System_abort("Task create failed!");
     }
+    
     //Sanity Check
     System_printf("Hello world!\n");
     System_flush();
